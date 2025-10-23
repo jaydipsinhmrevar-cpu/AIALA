@@ -1,0 +1,402 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>JD AI — In-Browser Python (Pyodide)</title>
+  <style>
+    :root{
+      --top-h:50px;
+      --accent-ai: rgba(31,144,255,0.85);
+      --accent-user: rgba(51,204,102,0.85);
+      --btn-wall: rgba(102,153,255,1);
+      --btn-save: rgba(204,77,153,1);
+      --btn-send: rgba(77,230,128,1);
+      --font-family: "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    }
+    html,body{height:100%;margin:0;font-family:var(--font-family);}
+    body{overflow:hidden;background:#222;color:#fff}
+    /* background image container */
+    .bg{
+      position:fixed;inset:0;background-size:cover;background-position:center;filter:brightness(0.6);
+      z-index:0;
+    }
+    /* main layout */
+    .main{
+      position:relative;z-index:1;height:100%;display:flex;flex-direction:column;padding:6px;
+      box-sizing:border-box;
+    }
+    .top{
+      height:var(--top-h);display:flex;align-items:center;gap:6px;
+    }
+    .top .title{font-weight:700;font-size:18px;flex:1}
+    .top button{
+      height:36px;border:none;border-radius:8px;padding:6px 10px;color:#fff;cursor:pointer;font-weight:600;
+    }
+    .btn-wall{background:var(--btn-wall)}
+    .btn-save{background:var(--btn-save)}
+    /* chat area */
+    .chat-wrap{flex:1;overflow:auto;padding:8px 6px;margin-top:6px;margin-bottom:6px;}
+    .bubbles{display:flex;flex-direction:column;gap:10px;max-width:100%;}
+    .bubble{
+      display:inline-block;padding:10px 12px;border-radius:12px;max-width:70%;word-wrap:break-word;
+      box-shadow:0 2px 6px rgba(0,0,0,0.2);
+    }
+    .bubble.ai{background:var(--accent-ai);color:#fff;align-self:flex-start;border-bottom-left-radius:4px;}
+    .bubble.user{background:var(--accent-user);color:#fff;align-self:flex-end;border-bottom-right-radius:4px;}
+    /* bottom input */
+    .bottom{height:50px;display:flex;gap:6px;align-items:center}
+    .input{
+      flex:1;height:40px;border-radius:8px;padding:8px 10px;border:none;font-size:15px;
+    }
+    .send-btn{width:76px;height:40px;border-radius:8px;border:none;font-weight:700;color:#fff;cursor:pointer}
+    /* wallpaper modal */
+    .modal{
+      position:fixed;inset:0;background:rgba(0,0,0,0.6);display:none;align-items:center;justify-content:center;z-index:10;
+    }
+    .modal .panel{width:92%;max-width:960px;height:86%;background:#111;border-radius:10px;padding:12px;overflow:auto}
+    .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+    .grid img{width:100%;height:150px;object-fit:cover;border-radius:6px;cursor:pointer}
+    /* saved tag */
+    .saved-toast{position:fixed;right:14px;bottom:14px;background:#000000cc;padding:10px;border-radius:8px;display:none;z-index:11}
+    /* responsiveness */
+    @media (max-width:600px){
+      .grid img{height:110px}
+      .title{font-size:16px}
+    }
+  </style>
+</head>
+<body>
+  <div id="bg" class="bg"></div>
+
+  <div class="main">
+    <div class="top">
+      <div class="title">JD AI</div>
+      <button id="btn-wall" class="btn-wall">Wallpaper</button>
+      <button id="btn-save" class="btn-save">Save</button>
+    </div>
+
+    <div id="chat-wrap" class="chat-wrap">
+      <div id="bubbles" class="bubbles"></div>
+    </div>
+
+    <div class="bottom">
+      <input id="input" class="input" type="text" placeholder="Type message..." />
+      <button id="send" class="send-btn" style="background:var(--btn-send)">Send</button>
+    </div>
+  </div>
+
+  <div id="modal" class="modal" role="dialog" aria-hidden="true">
+    <div class="panel">
+      <h3 style="margin:0 0 8px 0;color:#fff">Select Wallpaper</h3>
+      <div id="wallgrid" class="grid"></div>
+      <div style="margin-top:12px;text-align:right">
+        <button id="close-modal" style="padding:8px 12px;border-radius:8px;border:none;background:#333;color:#fff;cursor:pointer">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="saved-toast">Saved</div>
+
+  <!-- Pyodide -->
+  <script src="https://cdn.jsdelivr.net/pyodide/v0.23.4/full/pyodide.js"></script>
+
+  <script>
+  // ---------- Initialization & UI helpers ----------
+  const BUBBLES = document.getElementById('bubbles');
+  const BG = document.getElementById('bg');
+  const INPUT = document.getElementById('input');
+  const SEND = document.getElementById('send');
+  const BTN_WALL = document.getElementById('btn-wall');
+  const BTN_SAVE = document.getElementById('btn-save');
+  const MODAL = document.getElementById('modal');
+  const WALLGRID = document.getElementById('wallgrid');
+  const CLOSE_MODAL = document.getElementById('close-modal');
+  const TOAST = document.getElementById('toast');
+
+  // Default wallpapers (same list you provided)
+  const WALLPAPERS = [
+    "https://images.unsplash.com/photo-1501785888041-af3ef285b470?auto=format&fit=crop&w=800&q=80",
+    "https://images.unsplash.com/photo-1507525428034-b723cf961d3e?auto=format&fit=crop&w=800&q=80",
+    "https://images.unsplash.com/photo-1500534314209-a25ddb2bd429?auto=format&fit=crop&w=800&q=80",
+    "https://images.unsplash.com/photo-1506744038136-46273834b3fb?auto=format&fit=crop&w=800&q=80",
+    "https://images.unsplash.com/photo-1500530855697-b586d89ba3ee?auto=format&fit=crop&w=800&q=80",
+    "https://images.unsplash.com/photo-1519125323398-675f0ddb6308?auto=format&fit=crop&w=800&q=80",
+    "https://images.unsplash.com/photo-1493558103817-58b2924bce98?auto=format&fit=crop&w=800&q=80",
+    "https://images.unsplash.com/photo-1469474968028-56623f02e42e?auto=format&fit=crop&w=800&q=80",
+    "https://images.unsplash.com/photo-1482192596544-9eb780fc7f66?auto=format&fit=crop&w=800&q=80",
+    "https://images.unsplash.com/photo-1470770841072-f978cf4d019e?auto=format&fit=crop&w=800&q=80",
+    "https://images.unsplash.com/photo-1501594907352-04cda38ebc29?auto=format&fit=crop&w=800&q=80",
+    "https://images.unsplash.com/photo-1494526585095-c41746248156?auto=format&fit=crop&w=800&q=80",
+    "https://images.unsplash.com/photo-1491553895911-0055eca6402d?auto=format&fit=crop&w=800&q=80",
+    "https://images.unsplash.com/photo-1504386106331-3e4e71712b38?auto=format&fit=crop&w=800&q=80",
+    "https://images.unsplash.com/photo-1462331940025-496dfbfc7564?auto=format&fit=crop&w=800&q=80",
+    "https://images.unsplash.com/photo-1503264116251-35a269479413?auto=format&fit=crop&w=800&q=80",
+    "https://images.unsplash.com/photo-1545235617-9465d2a55698?auto=format&fit=crop&w=800&q=80",
+    "https://images.unsplash.com/photo-1496307042754-b4aa456c4a2d?auto=format&fit=crop&w=800&q=80",
+    "https://images.unsplash.com/photo-1518770660439-4636190af475?auto=format&fit=crop&w=800&q=80"
+  ];
+
+  // Local storage keys
+  const LS_HISTORY = 'jdai_history_v1';
+  const LS_KB = 'jdai_kb_v1';
+  const LS_USER = 'jdai_user_v1';
+
+  // Load persisted state or defaults
+  const loadLS = (k, def) => {
+    try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : def; } catch(e){ return def; }
+  };
+  const saveLS = (k, v) => { localStorage.setItem(k, JSON.stringify(v)); };
+
+  // defaults
+  let history = loadLS(LS_HISTORY, []);
+  let knowledge = loadLS(LS_KB, {
+    "what is your name":"I am JD AI, your online assistant.",
+    "hello":"Hello! How can I help you today?",
+    "how are you":"I'm always running fine!",
+    "help":"Try: math expressions, teach:Q=>A, show knowledge, save conversation.",
+    "your location":"Gujarat-Bhavnagar-Sidsar Road",
+    "your owner name":"Jaydipsinh Revar",
+    "your college name":"GMIU"
+  });
+  let user = loadLS(LS_USER, {name:null, wallpaper: WALLPAPERS[0]});
+  // apply wallpaper
+  BG.style.backgroundImage = `url('${user.wallpaper || WALLPAPERS[0]}')`;
+
+  // create bubble node
+  function addBubble(text, who){
+    const el = document.createElement('div');
+    el.className = 'bubble ' + (who === 'ai' ? 'ai' : 'user');
+    el.textContent = text;
+    BUBBLES.appendChild(el);
+    // scroll into view
+    el.scrollIntoView({behavior:'smooth', block:'end'});
+  }
+
+  function showSavedToast(){
+    TOAST.style.display='block';
+    setTimeout(()=>TOAST.style.display='none',1200);
+  }
+
+  // populate existing history
+  history.forEach(m => { addBubble(m.user, 'user'); addBubble(m.ai, 'ai'); });
+
+  // ---------- Pyodide: load and initialize Python logic ----------
+  let pyodide = null;
+  async function startPyodide(){
+    pyodide = await loadPyodide({
+      indexURL: "https://cdn.jsdelivr.net/pyodide/v0.23.4/full/"
+    });
+
+    // Provide JS-to-Python helpers for persistence (we'll exchange JSON strings)
+    await pyodide.runPythonAsync(`
+import js, json
+def js_load(key, default):
+    try:
+        v = js.localStorage.getItem(key)
+        return json.loads(v) if v is not None else default
+    except Exception:
+        return default
+
+def js_save(key, obj):
+    try:
+        js.localStorage.setItem(key, json.dumps(obj))
+        return True
+    except Exception:
+        return False
+`);
+
+    // Inject initial data into Python namespace
+    await pyodide.runPythonAsync(`
+from datetime import datetime
+import re, math, json
+# mimic your Python logic here
+DATA_DIR = None  # not used in browser
+# load persisted data from localStorage via js_load wrapper
+knowledge = js_load("${LS_KB}", {
+    "what is your name":"I am JD AI, your online assistant.",
+    "hello":"Hello! How can I help you today!",
+    "how are you":"I'm always running fine!",
+    "help":"Try: math expressions, teach:Q=>A, show knowledge, save conversation.",
+    "your location":"Gujarat-Bhavnagar-Sidsar Road",
+    "your owner name":"Jaydipsinh Revar",
+    "your college name":"GMIU"
+})
+history = js_load("${LS_HISTORY}", [])
+user = js_load("${LS_USER}", {"name": None, "wallpaper": "${user.wallpaper or WALLPAPERS[0]}"})
+
+SAFE_MATH = {
+    "sin": math.sin, "cos": math.cos, "tan": math.tan,
+    "asin": math.asin, "acos": math.acos, "atan": math.atan,
+    "sqrt": math.sqrt, "log": math.log, "ln": math.log, "log10": math.log10,
+    "factorial": math.factorial, "pi": math.pi, "e": math.e,
+    "abs": abs, "round": round, "pow": pow
+}
+
+def _safe_eval(expr):
+    expr = expr.replace("^", "**")
+    expr = re.sub(r'(\\d+)!', r'factorial(\\1)', expr)
+    try:
+        return str(eval(expr, {"__builtins__": None}, SAFE_MATH))
+    except Exception as e:
+        return "Math error: " + str(e)
+
+def normalize(txt):
+    return re.sub(r'[^a-z0-9\\s]', '', txt.lower().strip())
+
+def respond(text):
+    global knowledge, history, user
+    n = normalize(text)
+    # set name if unknown
+    if user.get("name") is None:
+        user["name"] = text.strip().title()
+        js_save("${LS_USER}", user)
+        return f"Nice to meet you {user['name']}! I will remember your name."
+    if text.lower().startswith("teach:"):
+        try:
+            q, a = text[6:].split("=>", 1)
+            knowledge[normalize(q)] = a.strip()
+            js_save("${LS_KB}", knowledge)
+            return f"Learned: '{q.strip()}' → '{a.strip()}'"
+        except:
+            return "Teach format: teach:question=>answer"
+    if n in ("show knowledge", "knowledge", "show kb"):
+        return "\\n".join([f"{q} → {a}" for q, a in knowledge.items()])
+    if "save conversation" in n:
+        js_save("${LS_HISTORY}", history)
+        js_save("${LS_KB}", knowledge)
+        js_save("${LS_USER}", user)
+        return "Saved."
+    math_expr = re.fullmatch(r'[0-9\\.\\+\\-\\*\\/\\(\\)\\s%^!eEpi]+', text)
+    if text.lower().startswith("calc "):
+        return _safe_eval(text[5:])
+    elif math_expr:
+        return _safe_eval(text)
+    if n in knowledge:
+        return knowledge[n]
+    if any(w in n for w in ["hello","hi","hey"]):
+        return f"Hello {user.get('name','')}! Ask 'help'."
+    if "time" in n:
+        return datetime.now().strftime("%H:%M:%S")
+    if "date" in n:
+        return datetime.now().strftime("%A, %d %B %Y")
+    return f"Sorry {user.get('name','')}, I don't understand. Try 'help'."
+
+def save_state():
+    js_save("${LS_HISTORY}", history)
+    js_save("${LS_KB}", knowledge)
+    js_save("${LS_USER}", user)
+    return True
+`);
+
+    // Expose a small Python wrapper callable from JS
+    // respond_from_js(text) returns the response and also appends to history in Python
+    await pyodide.runPythonAsync(`
+def respond_from_js(text):
+    global history
+    r = respond(text)
+    history.append({"user": text, "ai": r})
+    # persist history immediately in localStorage
+    js_save("${LS_HISTORY}", history)
+    return r
+`);
+  } // end startPyodide
+
+  // Begin loading pyodide
+  startPyodide();
+
+  // ---------- Interaction: calling Python respond ----------
+  async function pythonRespond(text){
+    if(!pyodide){
+      // fallback: very small JS fallback if pyodide still loading
+      return "Please wait — Python runtime loading...";
+    }
+    try {
+      // call Python respond_from_js
+      const res = await pyodide.runPythonAsync(`respond_from_js(${JSON.stringify(text)})`);
+      // update the JS-synced knowledge/history/user by reading them back
+      // (we could avoid this but keep in sync)
+      try{
+        const pyHistory = await pyodide.runPythonAsync('json.dumps(history)');
+        const pyKb = await pyodide.runPythonAsync('json.dumps(knowledge)');
+        const pyUser = await pyodide.runPythonAsync('json.dumps(user)');
+        history = JSON.parse(pyHistory);
+        knowledge = JSON.parse(pyKb);
+        user = JSON.parse(pyUser);
+        saveLS(LS_HISTORY, history);
+        saveLS(LS_KB, knowledge);
+        saveLS(LS_USER, user);
+      }catch(e){}
+      return res;
+    } catch(err){
+      console.error('Python error:', err);
+      return "Error in Python runtime: " + String(err);
+    }
+  }
+
+  // ---------- UI event wiring ----------
+  async function sendMessage(){
+    const txt = INPUT.value.trim();
+    if(!txt) return;
+    addBubble(txt,'user');
+    INPUT.value = '';
+    BUBBLES.scrollTop = BUBBLES.scrollHeight;
+    const resp = await pythonRespond(txt);
+    addBubble(resp,'ai');
+  }
+
+  SEND.addEventListener('click', sendMessage);
+  INPUT.addEventListener('keydown', async (e) => {
+    if(e.key === 'Enter'){ e.preventDefault(); await sendMessage(); }
+  });
+
+  // Save button: persist state via Python save_state
+  BTN_SAVE.addEventListener('click', async () => {
+    if(pyodide){
+      try {
+        await pyodide.runPythonAsync('save_state()');
+        saveLS(LS_HISTORY, history);
+        saveLS(LS_KB, knowledge);
+        saveLS(LS_USER, user);
+        showSavedToast();
+      } catch(e){
+        console.error(e);
+        showSavedToast();
+      }
+    } else {
+      showSavedToast();
+    }
+  });
+
+  // Wallpaper modal open
+  BTN_WALL.addEventListener('click', () => {
+    // populate grid
+    WALLGRID.innerHTML = '';
+    WALLPAPERS.forEach(url=>{
+      const img = document.createElement('img');
+      img.src = url;
+      img.addEventListener('click', () => {
+        user.wallpaper = url;
+        saveLS(LS_USER, user);
+        BG.style.backgroundImage = `url('${url}')`;
+        // also update Python-side user object if pyodide ready
+        if(pyodide) pyodide.runPythonAsync(`user['wallpaper'] = ${JSON.stringify(url)}; js_save("${LS_USER}", user)`);
+        MODAL.style.display = 'none';
+      });
+      WALLGRID.appendChild(img);
+    });
+    MODAL.style.display = 'flex';
+  });
+  CLOSE_MODAL.addEventListener('click', ()=> MODAL.style.display='none');
+
+  // Clicking outside panel closes modal
+  MODAL.addEventListener('click', (e) => { if(e.target === MODAL) MODAL.style.display='none'; });
+
+  // Expose simple global for debugging (optional)
+  window.jdai = {
+    getState: ()=>({history,knowledge,user})
+  };
+
+  </script>
+</body>
+</html>
